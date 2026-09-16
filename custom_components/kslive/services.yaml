@@ -1,0 +1,20 @@
+play:
+  name: Play audio
+  description: Play the current KSLive audio or a selected content item.
+  fields:
+    content_id:
+      name: Content ID
+      description: Optional KSLive content ID. The current show or latest recording is used when omitted.
+      example: 4350945
+      selector:
+        number:
+          min: 1
+          mode: box
+    media_players:
+      name: Media players
+      description: Optional override for the speakers configured in integration options.
+      selector:
+        entity:
+          domain: media_player
+          multiple: true
+

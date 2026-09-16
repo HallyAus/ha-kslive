@@ -1,0 +1,61 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Connect KSLive",
+        "description": "Sign in with an active KSLive subscriber account. Your password is exchanged for tokens and is not stored.",
+        "data": {
+          "email": "Email",
+          "password": "Password"
+        }
+      },
+      "speakers": {
+        "title": "Choose speakers",
+        "description": "Select the media players that should receive KSLive audio. You can change these later in integration options.",
+        "data": {
+          "media_players": "Speakers"
+        }
+      },
+      "reauth_confirm": {
+        "title": "Reconnect KSLive",
+        "description": "Enter the password for {email}. The password will not be stored.",
+        "data": {
+          "password": "Password"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Could not connect to KSLive",
+      "invalid_auth": "The email or password was not accepted",
+      "subscription_required": "This KSLive account does not have an active subscription"
+    },
+    "abort": {
+      "already_configured": "This KSLive account is already configured",
+      "reauth_successful": "KSLive was reconnected successfully"
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "KSLive options",
+        "data": {
+          "media_players": "Speakers",
+          "search_query": "Catalog search text"
+        },
+        "data_description": {
+          "media_players": "Speakers that receive KSLive audio when Play audio is pressed.",
+          "search_query": "Text used to find the KSLive audio feed and recordings."
+        }
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "audio_status": {"name": "Audio status"}
+    },
+    "button": {
+      "play_audio": {"name": "Play audio"},
+      "refresh": {"name": "Refresh"}
+    }
+  }
+}
