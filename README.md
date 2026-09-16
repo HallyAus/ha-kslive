@@ -8,6 +8,8 @@ An unofficial HACS integration for active [KSLive](https://kslive.com.au) subscr
 - The password is exchanged for short-lived access/refresh tokens and is never stored.
 - Automatic token refresh and Home Assistant reauthentication when required.
 - Audio status sensor with current, upcoming, and latest-recording metadata.
+- Spotify-style KSLive media player with browse, play, pause, stop, previous, and next controls.
+- Output picker for individual configured speakers or all configured speakers at once.
 - **Play audio** button for the live show (or latest available recording).
 - `kslive.play` service for dashboards and automations, including an optional content ID and speaker override.
 - Diagnostics redact authentication tokens and never expose signed playback URLs.
@@ -39,6 +41,12 @@ data:
 To play a specific recording, also provide its `content_id`. IDs for the current show, next show, and latest recording are exposed as attributes on the **KSLive Audio status** sensor.
 
 The target speaker must support HTTPS HLS/AAC playback. Some cast devices require Home Assistant and the speaker to have working internet access and correct DNS/time settings.
+
+The **KSLive Player** entity also exposes Home Assistant's media browser and normal media-player
+controls. Select the output with **KSLive Output** before pressing Play. If more than one speaker is
+configured, choose **All configured speakers** to send the same stream to each of them. Separate
+speakers may not be sample-synchronised; configure a native speaker-group entity when exact room-to-room
+sync is required.
 
 ## Security and compatibility
 

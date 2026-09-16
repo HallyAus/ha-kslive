@@ -44,6 +44,31 @@ def test_parse_catalog_prioritizes_live_and_latest_recording() -> None:
     assert catalog.upcoming and catalog.upcoming.content_id == 2
     assert catalog.latest_recording and catalog.latest_recording.content_id == 3
     assert catalog.playable == catalog.current
+    assert [item.content_id for item in catalog.playable_items] == [1, 3]
+
+
+def test_playable_items_are_newest_first_without_duplicates() -> None:
+    now = datetime(2026, 9, 16, 0, 0, tzinfo=UTC)
+    catalog = parse_catalog(
+        {
+            "contents": [
+                {
+                    "id": 8,
+                    "title": "Older recording",
+                    "content_type": "audio",
+                    "launch_date": "2026-09-14T06:00:00+10:00",
+                },
+                {
+                    "id": 9,
+                    "title": "Newest recording",
+                    "content_type": "audio",
+                    "launch_date": "2026-09-15T06:00:00+10:00",
+                },
+            ]
+        },
+        now=now,
+    )
+    assert [item.content_id for item in catalog.playable_items] == [9, 8]
 
 
 def test_find_stream_url_recurses_without_accepting_web_pages() -> None:

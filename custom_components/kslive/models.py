@@ -78,6 +78,7 @@ class KSLiveCatalog:
     current: KSLiveContent | None
     upcoming: KSLiveContent | None
     latest_recording: KSLiveContent | None
+    recordings: tuple[KSLiveContent, ...]
 
     @property
     def state(self) -> str:
@@ -94,6 +95,17 @@ class KSLiveCatalog:
     def playable(self) -> KSLiveContent | None:
         """Prefer the live show, otherwise the newest recording."""
         return self.current or self.latest_recording
+
+    @property
+    def playable_items(self) -> tuple[KSLiveContent, ...]:
+        """Return the live show followed by recordings in queue order."""
+        ordered = ((self.current,) if self.current is not None else ()) + self.recordings
+        seen: set[int] = set()
+        return tuple(
+            item
+            for item in ordered
+            if item.content_id not in seen and not seen.add(item.content_id)
+        )
 
 
 def parse_catalog(payload: dict[str, Any], *, now: datetime | None = None) -> KSLiveCatalog:
@@ -133,6 +145,7 @@ def parse_catalog(payload: dict[str, Any], *, now: datetime | None = None) -> KS
         current=current,
         upcoming=future[0] if future else None,
         latest_recording=recordings[0] if recordings else None,
+        recordings=tuple(recordings),
     )
 
 
@@ -168,4 +181,3 @@ def find_stream_url(value: Any) -> str | None:
             if found := find_stream_url(nested):
                 return found
     return None
-

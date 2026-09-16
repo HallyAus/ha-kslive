@@ -12,7 +12,7 @@ def test_manifest() -> None:
     )
     assert manifest["domain"] == "kslive"
     assert manifest["config_flow"] is True
-    assert manifest["version"] == "0.1.1"
+    assert manifest["version"] == "0.2.0"
 
 
 def test_hacs_metadata() -> None:

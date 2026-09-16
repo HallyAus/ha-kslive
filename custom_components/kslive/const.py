@@ -22,9 +22,11 @@ CONF_SEARCH_QUERY = "search_query"
 DEFAULT_SEARCH_QUERY = "Audio"
 DEFAULT_SCAN_INTERVAL = timedelta(minutes=5)
 
-PLATFORMS = ["sensor", "button"]
+PLATFORMS = ["sensor", "button", "media_player", "select"]
+
+ALL_SPEAKERS_SOURCE = "All configured speakers"
+MEDIA_ID_PREFIX = "kslive:"
 
 SERVICE_PLAY = "play"
 ATTR_CONTENT_ID = "content_id"
 ATTR_MEDIA_PLAYERS = "media_players"
-

@@ -14,6 +14,7 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 
 from .api import KSLiveApiClient, KSLiveApiError, KSLiveAuthenticationError, KSLivePlaybackError
 from .const import (
+    ALL_SPEAKERS_SOURCE,
     CONF_MEDIA_PLAYERS,
     CONF_SEARCH_QUERY,
     DEFAULT_SCAN_INTERVAL,
@@ -37,6 +38,11 @@ class KSLiveCoordinator(DataUpdateCoordinator[KSLiveCatalog]):
         )
         self.entry = entry
         self.client = client
+        self.last_content_id: int | None = None
+        self.last_targets: tuple[str, ...] = ()
+        self.last_stream_url: str | None = None
+        self.playback_active = False
+        self._selected_source: str | None = None
 
     async def _async_update_data(self) -> KSLiveCatalog:
         try:
@@ -85,4 +91,79 @@ class KSLiveCoordinator(DataUpdateCoordinator[KSLiveCatalog]):
             },
             blocking=True,
         )
+        self.last_content_id = content_id
+        self.last_targets = tuple(targets)
+        self.last_stream_url = stream_url
+        self.playback_active = True
+        self.async_set_updated_data(self.data)
 
+    @property
+    def configured_players(self) -> tuple[str, ...]:
+        """Return the output players selected in integration options."""
+        return tuple(self.entry.options.get(CONF_MEDIA_PLAYERS, []))
+
+    @property
+    def output_sources(self) -> dict[str, tuple[str, ...]]:
+        """Return display names mapped to one or more output entities."""
+        players = self.configured_players
+        sources: dict[str, tuple[str, ...]] = {}
+        used_names: set[str] = set()
+        for entity_id in players:
+            state = self.hass.states.get(entity_id)
+            name = (
+                str(state.attributes.get("friendly_name"))
+                if state and state.attributes.get("friendly_name")
+                else entity_id
+            )
+            if name in used_names:
+                name = f"{name} ({entity_id})"
+            used_names.add(name)
+            sources[name] = (entity_id,)
+        if len(players) > 1:
+            sources[ALL_SPEAKERS_SOURCE] = players
+        return sources
+
+    @property
+    def selected_source(self) -> str | None:
+        """Return the current output selection without starting playback."""
+        sources = self.output_sources
+        if self._selected_source not in sources:
+            self._selected_source = next(iter(sources), None)
+        return self._selected_source
+
+    @property
+    def selected_targets(self) -> tuple[str, ...]:
+        """Return the entity IDs for the current output selection."""
+        source = self.selected_source
+        return self.output_sources.get(source, ()) if source is not None else ()
+
+    def select_source(self, source: str) -> None:
+        """Select an output without transferring or starting playback."""
+        if source not in self.output_sources:
+            raise HomeAssistantError(f"Unknown KSLive output: {source}")
+        self._selected_source = source
+        self.async_set_updated_data(self.data)
+
+    def content(self, content_id: int | None = None):
+        """Return a catalog item by ID, or the current queue item."""
+        if self.data is None:
+            return None
+        wanted = content_id if content_id is not None else self.last_content_id
+        if wanted is not None:
+            return next(
+                (item for item in self.data.playable_items if item.content_id == wanted),
+                None,
+            )
+        return self.data.playable
+
+    def adjacent_content(self, step: int):
+        """Return the previous or next playable catalog item, wrapping at the ends."""
+        if self.data is None or not self.data.playable_items:
+            return None
+        items = self.data.playable_items
+        current_id = self.last_content_id
+        index = next(
+            (position for position, item in enumerate(items) if item.content_id == current_id),
+            -1 if step > 0 else 0,
+        )
+        return items[(index + step) % len(items)]
