@@ -57,7 +57,7 @@ The **KSLive Player** entity also exposes Home Assistant's media browser and nor
 controls. Select the output with **KSLive Output** before pressing Play. If more than one speaker is
 configured, choose **All configured speakers** to send the same stream to each of them. Separate
 speakers may not be sample-synchronised; configure a native speaker-group entity when exact room-to-room
-sync is required.
+sync is required. The selected output is restored after Home Assistant restarts.
 
 ## Recommended dashboard card
 
@@ -117,7 +117,7 @@ change, integration unload or an externally detected stop. Non-Sonos outputs ign
 - **Sonos stays on Buffering:** confirm the speaker can reach Home Assistant on the LAN and that
   Home Assistant's internal URL is valid under **Settings → System → Network**.
 - **First Play is slower than Cast:** Sonos must open a fresh subscriber HLS stream through the local
-  audio-only relay. KSLive v0.3.1 reduces the initial HLS probe and preserves the relay for a 30-second
+  audio-only relay. KSLive v0.3.2 reduces the initial HLS probe and preserves the relay for a 30-second
   startup window instead of treating normal buffering as a failed playback.
 - **No artwork card:** install Mushroom and Stack In Card, then add the YAML above. The integration
   cannot safely edit a user's dashboard during installation.
