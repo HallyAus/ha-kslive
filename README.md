@@ -11,6 +11,8 @@ An unofficial HACS integration for active [KSLive](https://kslive.com.au) subscr
 - Spotify-style KSLive media player with browse, play, pause, stop, previous, and next controls.
 - Output picker for individual configured speakers or all configured speakers at once.
 - Automatic audio-only relay for Sonos speakers when KSLive supplies video-bearing HLS.
+- KSLive-only Sonos EQ preset with saved bass, treble and loudness controls; the speaker's previous
+  settings are restored when KSLive stops.
 - **Play audio** button for the live show (or latest available recording).
 - `kslive.play` service for dashboards and automations, including an optional content ID and speaker override.
 - Diagnostics redact authentication tokens and never expose signed playback URLs.
@@ -71,11 +73,38 @@ cards:
     fill_container: true
     tap_action:
       action: more-info
+  - type: custom:mushroom-number-card
+    entity: number.kslive_bass_preset
+    name: KSLive bass
+    icon: mdi:music-clef-bass
+    display_mode: slider
+  - type: custom:mushroom-number-card
+    entity: number.kslive_treble_preset
+    name: KSLive treble
+    icon: mdi:music-clef-treble
+    display_mode: slider
+  - type: horizontal-stack
+    cards:
+      - type: custom:mushroom-entity-card
+        entity: switch.kslive_eq_preset
+        name: KSLive EQ
+        icon: mdi:tune-vertical
+        tap_action:
+          action: toggle
+      - type: custom:mushroom-entity-card
+        entity: switch.kslive_loudness_preset
+        name: Loudness
+        icon: mdi:volume-high
+        tap_action:
+          action: toggle
 ```
 
 The media-control card uses the current KSLive programme artwork as its background and includes the
-player's volume and transport controls. Changing **Play on** only changes the destination; it does
-not start playback.
+player’s volume and transport controls. Changing **Play on** only changes the destination; it does
+not start playback. The default KSLive EQ is a warmer bass +4, treble −2, with Sonos loudness on.
+Changing the sliders saves the KSLive preset and updates an active KSLive Sonos session. The
+integration captures the speaker’s previous EQ before playback and restores it on Stop, output
+change, integration unload or an externally detected stop. Non-Sonos outputs ignore the EQ preset.
 
 ## Security and compatibility
 

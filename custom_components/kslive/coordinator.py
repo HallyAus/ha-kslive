@@ -5,12 +5,8 @@ from __future__ import annotations
 import asyncio
 from datetime import UTC, datetime
 
-from homeassistant.components.media_player import (
-    DOMAIN as MEDIA_PLAYER_DOMAIN,
-)
-from homeassistant.components.media_player import (
-    async_process_play_media_url,
-)
+from homeassistant.components.media_player import DOMAIN as MEDIA_PLAYER_DOMAIN
+from homeassistant.components.media_player import async_process_play_media_url
 from homeassistant.components.media_player.const import SERVICE_PLAY_MEDIA
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import ATTR_ENTITY_ID
@@ -29,6 +25,7 @@ from .const import (
     DEFAULT_SEARCH_QUERY,
     NAME,
 )
+from .equalizer import KSLiveEqualizer
 from .models import KSLiveCatalog, parse_catalog
 from .streaming import needs_audio_relay
 
@@ -42,6 +39,7 @@ class KSLiveCoordinator(DataUpdateCoordinator[KSLiveCatalog]):
         entry: ConfigEntry,
         client: KSLiveApiClient,
         audio_proxy: KSLiveAudioProxy,
+        equalizer: KSLiveEqualizer,
     ) -> None:
         super().__init__(
             hass,
@@ -52,10 +50,12 @@ class KSLiveCoordinator(DataUpdateCoordinator[KSLiveCatalog]):
         self.entry = entry
         self.client = client
         self.audio_proxy = audio_proxy
+        self.equalizer = equalizer
         self.last_content_id: int | None = None
         self.last_targets: tuple[str, ...] = ()
         self.playback_active = False
         self._selected_source: str | None = None
+        self._inactive_cleanup_task: asyncio.Task[None] | None = None
 
     async def _async_update_data(self) -> KSLiveCatalog:
         try:
@@ -94,18 +94,21 @@ class KSLiveCoordinator(DataUpdateCoordinator[KSLiveCatalog]):
         except KSLiveApiError as err:
             raise HomeAssistantError("Unable to get the KSLive audio stream") from err
 
-        entity_registry = er.async_get(self.hass)
-        for target in targets:
-            registry_entry = entity_registry.async_get(target)
-            use_relay = needs_audio_relay(
-                registry_entry.platform if registry_entry is not None else None
-            )
-            media_url = stream_url
-            if use_relay:
-                relay_path = await self.audio_proxy.async_create_path(target, stream_url)
-                media_url = async_process_play_media_url(self.hass, relay_path)
+        self._cancel_inactive_cleanup()
+        target_tuple = tuple(targets)
+        await self.equalizer.async_apply(target_tuple)
+        try:
+            entity_registry = er.async_get(self.hass)
+            for target in targets:
+                registry_entry = entity_registry.async_get(target)
+                use_relay = needs_audio_relay(
+                    registry_entry.platform if registry_entry is not None else None
+                )
+                media_url = stream_url
+                if use_relay:
+                    relay_path = await self.audio_proxy.async_create_path(target, stream_url)
+                    media_url = async_process_play_media_url(self.hass, relay_path)
 
-            try:
                 await self.hass.services.async_call(
                     MEDIA_PLAYER_DOMAIN,
                     SERVICE_PLAY_MEDIA,
@@ -116,13 +119,12 @@ class KSLiveCoordinator(DataUpdateCoordinator[KSLiveCatalog]):
                     },
                     blocking=True,
                 )
-            except Exception:
-                if use_relay:
-                    await self.audio_proxy.async_stop_target(target)
-                raise
+        except Exception:
+            await self.async_stop_playback_effects(target_tuple)
+            raise
 
         self.last_content_id = content_id
-        self.last_targets = tuple(targets)
+        self.last_targets = target_tuple
         self.playback_active = True
         self.async_set_updated_data(self.data)
 
@@ -131,6 +133,64 @@ class KSLiveCoordinator(DataUpdateCoordinator[KSLiveCatalog]):
         await asyncio.gather(
             *(self.audio_proxy.async_stop_target(target) for target in targets)
         )
+
+    async def async_stop_playback_effects(self, targets: tuple[str, ...]) -> None:
+        """Stop relays and restore speaker settings captured for KSLive."""
+        self._cancel_inactive_cleanup()
+        await self.async_stop_relays(targets)
+        await self.equalizer.async_restore(targets)
+
+    async def async_set_equalizer(self, key: str, value: float | bool) -> None:
+        """Persist an EQ preset change and apply it to active KSLive outputs."""
+        was_enabled = self.equalizer.settings.enabled
+        await self.equalizer.async_set(key, value)
+        if not self.playback_active or not self.last_targets:
+            self.async_set_updated_data(self.data)
+            return
+        if key == "enabled" and was_enabled and not bool(value):
+            await self.equalizer.async_restore(self.last_targets)
+        elif self.equalizer.settings.enabled:
+            await self.equalizer.async_apply(self.last_targets)
+        self.async_set_updated_data(self.data)
+
+    def output_state_changed(self) -> None:
+        """Restore KSLive-only effects after an external stop or source change."""
+        if not self.playback_active or not self.last_targets:
+            return
+        active_states = {
+            state.state
+            for target in self.last_targets
+            if (state := self.hass.states.get(target)) is not None
+        }
+        if active_states & {"playing", "paused"}:
+            self._cancel_inactive_cleanup()
+            return
+        if self._inactive_cleanup_task is None:
+            self._inactive_cleanup_task = self.hass.async_create_task(
+                self._async_cleanup_if_inactive(),
+                "kslive-equalizer-restore",
+            )
+
+    async def _async_cleanup_if_inactive(self) -> None:
+        try:
+            await asyncio.sleep(5)
+            if any(
+                (state := self.hass.states.get(target)) is not None
+                and state.state in {"playing", "paused"}
+                for target in self.last_targets
+            ):
+                return
+            await self.async_stop_playback_effects(self.last_targets)
+            self.playback_active = False
+            self.async_set_updated_data(self.data)
+        finally:
+            self._inactive_cleanup_task = None
+
+    def _cancel_inactive_cleanup(self) -> None:
+        task = self._inactive_cleanup_task
+        self._inactive_cleanup_task = None
+        if task is not None and task is not asyncio.current_task():
+            task.cancel()
 
     @property
     def configured_players(self) -> tuple[str, ...]:

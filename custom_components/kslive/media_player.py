@@ -62,6 +62,7 @@ class KSLiveMediaPlayer(KSLiveEntity, MediaPlayerEntity):
 
     @callback
     def _async_output_state_changed(self, _event: Event) -> None:
+        self.coordinator.output_state_changed()
         self.async_write_ha_state()
 
     @property
@@ -205,7 +206,7 @@ class KSLiveMediaPlayer(KSLiveEntity, MediaPlayerEntity):
 
     async def async_media_stop(self) -> None:
         await self._call_output("media_stop", targets=self._active_targets)
-        await self.coordinator.async_stop_relays(self._active_targets)
+        await self.coordinator.async_stop_playback_effects(self._active_targets)
         self.coordinator.playback_active = False
         self.coordinator.async_set_updated_data(self.coordinator.data)
 
@@ -260,7 +261,9 @@ class KSLiveMediaPlayer(KSLiveEntity, MediaPlayerEntity):
             await self._call_output(
                 "media_stop", targets=self.coordinator.last_targets
             )
-            await self.coordinator.async_stop_relays(self.coordinator.last_targets)
+            await self.coordinator.async_stop_playback_effects(
+                self.coordinator.last_targets
+            )
             self.coordinator.playback_active = False
 
     async def async_browse_media(
