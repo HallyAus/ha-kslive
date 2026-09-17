@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from datetime import UTC, datetime
 
 from homeassistant.components.media_player import DOMAIN as MEDIA_PLAYER_DOMAIN
@@ -27,6 +28,7 @@ from .const import (
 )
 from .equalizer import KSLiveEqualizer
 from .models import KSLiveCatalog, parse_catalog
+from .playback_state import ACTIVE_OUTPUT_STATES, PLAYBACK_START_GRACE, inactive_cleanup_delay
 from .streaming import needs_audio_relay
 
 
@@ -56,6 +58,7 @@ class KSLiveCoordinator(DataUpdateCoordinator[KSLiveCatalog]):
         self.playback_active = False
         self._selected_source: str | None = None
         self._inactive_cleanup_task: asyncio.Task[None] | None = None
+        self._playback_start_deadline: float | None = None
 
     async def _async_update_data(self) -> KSLiveCatalog:
         try:
@@ -96,6 +99,10 @@ class KSLiveCoordinator(DataUpdateCoordinator[KSLiveCatalog]):
 
         self._cancel_inactive_cleanup()
         target_tuple = tuple(targets)
+        self.last_content_id = content_id
+        self.last_targets = target_tuple
+        self.playback_active = True
+        self._playback_start_deadline = time.monotonic() + PLAYBACK_START_GRACE
         await self.equalizer.async_apply(target_tuple)
         try:
             entity_registry = er.async_get(self.hass)
@@ -121,12 +128,11 @@ class KSLiveCoordinator(DataUpdateCoordinator[KSLiveCatalog]):
                 )
         except Exception:
             await self.async_stop_playback_effects(target_tuple)
+            self.playback_active = False
             raise
 
-        self.last_content_id = content_id
-        self.last_targets = target_tuple
-        self.playback_active = True
         self.async_set_updated_data(self.data)
+        self.output_state_changed()
 
     async def async_stop_relays(self, targets: tuple[str, ...]) -> None:
         """Stop any audio-only relays assigned to the supplied players."""
@@ -137,6 +143,7 @@ class KSLiveCoordinator(DataUpdateCoordinator[KSLiveCatalog]):
     async def async_stop_playback_effects(self, targets: tuple[str, ...]) -> None:
         """Stop relays and restore speaker settings captured for KSLive."""
         self._cancel_inactive_cleanup()
+        self._playback_start_deadline = None
         await self.async_stop_relays(targets)
         await self.equalizer.async_restore(targets)
 
@@ -162,24 +169,37 @@ class KSLiveCoordinator(DataUpdateCoordinator[KSLiveCatalog]):
             for target in self.last_targets
             if (state := self.hass.states.get(target)) is not None
         }
-        if active_states & {"playing", "paused"}:
+        if active_states & ACTIVE_OUTPUT_STATES:
+            self._playback_start_deadline = None
             self._cancel_inactive_cleanup()
             return
-        if self._inactive_cleanup_task is None:
-            self._inactive_cleanup_task = self.hass.async_create_task(
-                self._async_cleanup_if_inactive(),
-                "kslive-equalizer-restore",
-            )
+        startup_remaining = max(
+            0.0, (self._playback_start_deadline or 0.0) - time.monotonic()
+        )
+        delay = inactive_cleanup_delay(active_states, startup_remaining)
+        if delay is not None:
+            self._schedule_inactive_cleanup(delay)
 
-    async def _async_cleanup_if_inactive(self) -> None:
+    def _schedule_inactive_cleanup(self, delay: float) -> None:
+        """Schedule one cleanup without shortening an existing start-up grace."""
+        if self._inactive_cleanup_task is not None:
+            return
+        self._inactive_cleanup_task = self.hass.async_create_task(
+            self._async_cleanup_if_inactive(delay),
+            "kslive-equalizer-restore",
+        )
+
+    async def _async_cleanup_if_inactive(self, delay: float) -> None:
         try:
-            await asyncio.sleep(5)
+            await asyncio.sleep(delay)
             if any(
                 (state := self.hass.states.get(target)) is not None
-                and state.state in {"playing", "paused"}
+                and state.state in ACTIVE_OUTPUT_STATES
                 for target in self.last_targets
             ):
+                self._playback_start_deadline = None
                 return
+            self._playback_start_deadline = None
             await self.async_stop_playback_effects(self.last_targets)
             self.playback_active = False
             self.async_set_updated_data(self.data)
@@ -191,6 +211,14 @@ class KSLiveCoordinator(DataUpdateCoordinator[KSLiveCatalog]):
         self._inactive_cleanup_task = None
         if task is not None and task is not asyncio.current_task():
             task.cancel()
+
+    @property
+    def playback_starting(self) -> bool:
+        """Return whether a selected output is inside its startup grace period."""
+        return bool(
+            self._playback_start_deadline is not None
+            and self._playback_start_deadline > time.monotonic()
+        )
 
     @property
     def configured_players(self) -> tuple[str, ...]:

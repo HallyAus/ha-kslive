@@ -95,6 +95,8 @@ class KSLiveMediaPlayer(KSLiveEntity, MediaPlayerEntity):
             return MediaPlayerState.PLAYING
         if "paused" in raw_states:
             return MediaPlayerState.PAUSED
+        if self.coordinator.playback_starting or "buffering" in raw_states:
+            return MediaPlayerState.BUFFERING
         if raw_states and raw_states <= {"off", "unavailable", "unknown"}:
             return MediaPlayerState.OFF
         return MediaPlayerState.IDLE
