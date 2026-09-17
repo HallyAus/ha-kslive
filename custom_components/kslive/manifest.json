@@ -4,10 +4,11 @@
   "after_dependencies": ["media_player"],
   "codeowners": ["@HallyAus"],
   "config_flow": true,
+  "dependencies": ["ffmpeg", "http"],
   "documentation": "https://github.com/HallyAus/ha-kslive#readme",
   "integration_type": "service",
   "iot_class": "cloud_polling",
   "issue_tracker": "https://github.com/HallyAus/ha-kslive/issues",
   "requirements": [],
-  "version": "0.2.0"
+  "version": "0.2.1"
 }

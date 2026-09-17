@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import voluptuous as vol
+from homeassistant.components.ffmpeg import get_ffmpeg_manager
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import EVENT_HOMEASSISTANT_STOP
 from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .api import KSLiveApiClient
+from .audio_proxy import DATA_AUDIO_PROXY, KSLiveAudioProxy, KSLiveAudioView
 from .const import (
     ATTR_CONTENT_ID,
     ATTR_MEDIA_PLAYERS,
@@ -44,7 +47,18 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         device_id=entry.data.get(CONF_DEVICE_ID),
         token_callback=async_tokens_updated,
     )
-    coordinator = KSLiveCoordinator(hass, entry, client)
+    audio_proxy = hass.data.get(DATA_AUDIO_PROXY)
+    if audio_proxy is None:
+        audio_proxy = KSLiveAudioProxy(hass, get_ffmpeg_manager(hass).binary)
+        hass.data[DATA_AUDIO_PROXY] = audio_proxy
+        hass.http.register_view(KSLiveAudioView(audio_proxy))
+
+        async def async_stop_audio_proxy(_event) -> None:
+            await audio_proxy.async_shutdown()
+
+        hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STOP, async_stop_audio_proxy)
+
+    coordinator = KSLiveCoordinator(hass, entry, client, audio_proxy)
     await coordinator.async_config_entry_first_refresh()
 
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
@@ -73,7 +87,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a KSLive config entry."""
     if not await hass.config_entries.async_unload_platforms(entry, PLATFORMS):
         return False
-    hass.data[DOMAIN].pop(entry.entry_id)
+    coordinator: KSLiveCoordinator = hass.data[DOMAIN].pop(entry.entry_id)
+    await coordinator.async_stop_relays(coordinator.configured_players)
     if not hass.data[DOMAIN]:
         hass.services.async_remove(DOMAIN, SERVICE_PLAY)
         hass.data.pop(DOMAIN, None)

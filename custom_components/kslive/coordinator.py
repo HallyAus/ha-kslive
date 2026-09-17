@@ -2,17 +2,25 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime
 
-from homeassistant.components.media_player import DOMAIN as MEDIA_PLAYER_DOMAIN
+from homeassistant.components.media_player import (
+    DOMAIN as MEDIA_PLAYER_DOMAIN,
+)
+from homeassistant.components.media_player import (
+    async_process_play_media_url,
+)
 from homeassistant.components.media_player.const import SERVICE_PLAY_MEDIA
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import ATTR_ENTITY_ID
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed, HomeAssistantError
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .api import KSLiveApiClient, KSLiveApiError, KSLiveAuthenticationError, KSLivePlaybackError
+from .audio_proxy import KSLiveAudioProxy
 from .const import (
     ALL_SPEAKERS_SOURCE,
     CONF_MEDIA_PLAYERS,
@@ -22,13 +30,18 @@ from .const import (
     NAME,
 )
 from .models import KSLiveCatalog, parse_catalog
+from .streaming import needs_audio_relay
 
 
 class KSLiveCoordinator(DataUpdateCoordinator[KSLiveCatalog]):
     """Fetch catalog updates and send audio to Home Assistant players."""
 
     def __init__(
-        self, hass: HomeAssistant, entry: ConfigEntry, client: KSLiveApiClient
+        self,
+        hass: HomeAssistant,
+        entry: ConfigEntry,
+        client: KSLiveApiClient,
+        audio_proxy: KSLiveAudioProxy,
     ) -> None:
         super().__init__(
             hass,
@@ -38,9 +51,9 @@ class KSLiveCoordinator(DataUpdateCoordinator[KSLiveCatalog]):
         )
         self.entry = entry
         self.client = client
+        self.audio_proxy = audio_proxy
         self.last_content_id: int | None = None
         self.last_targets: tuple[str, ...] = ()
-        self.last_stream_url: str | None = None
         self.playback_active = False
         self._selected_source: str | None = None
 
@@ -81,21 +94,43 @@ class KSLiveCoordinator(DataUpdateCoordinator[KSLiveCatalog]):
         except KSLiveApiError as err:
             raise HomeAssistantError("Unable to get the KSLive audio stream") from err
 
-        await self.hass.services.async_call(
-            MEDIA_PLAYER_DOMAIN,
-            SERVICE_PLAY_MEDIA,
-            {
-                ATTR_ENTITY_ID: targets,
-                "media_content_id": stream_url,
-                "media_content_type": "music",
-            },
-            blocking=True,
-        )
+        entity_registry = er.async_get(self.hass)
+        for target in targets:
+            registry_entry = entity_registry.async_get(target)
+            use_relay = needs_audio_relay(
+                registry_entry.platform if registry_entry is not None else None
+            )
+            media_url = stream_url
+            if use_relay:
+                relay_path = await self.audio_proxy.async_create_path(target, stream_url)
+                media_url = async_process_play_media_url(self.hass, relay_path)
+
+            try:
+                await self.hass.services.async_call(
+                    MEDIA_PLAYER_DOMAIN,
+                    SERVICE_PLAY_MEDIA,
+                    {
+                        ATTR_ENTITY_ID: target,
+                        "media_content_id": media_url,
+                        "media_content_type": "music",
+                    },
+                    blocking=True,
+                )
+            except Exception:
+                if use_relay:
+                    await self.audio_proxy.async_stop_target(target)
+                raise
+
         self.last_content_id = content_id
         self.last_targets = tuple(targets)
-        self.last_stream_url = stream_url
         self.playback_active = True
         self.async_set_updated_data(self.data)
+
+    async def async_stop_relays(self, targets: tuple[str, ...]) -> None:
+        """Stop any audio-only relays assigned to the supplied players."""
+        await asyncio.gather(
+            *(self.audio_proxy.async_stop_target(target) for target in targets)
+        )
 
     @property
     def configured_players(self) -> tuple[str, ...]:
