@@ -17,9 +17,6 @@ def test_ffmpeg_command_outputs_audio_only_mp3() -> None:
 
     assert arguments[arguments.index("-i") + 1] == source_url
     assert arguments[arguments.index("-map") + 1] == "0:a:0"
-    assert arguments[arguments.index("-probesize") + 1] == "32k"
-    assert arguments[arguments.index("-analyzeduration") + 1] == "0"
-    assert arguments[arguments.index("-live_start_index") + 1] == "-1"
     assert "-vn" in arguments
     assert arguments[arguments.index("-c:a") + 1] == "libmp3lame"
     assert arguments[arguments.index("-f") + 1] == "mp3"

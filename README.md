@@ -117,8 +117,9 @@ change, integration unload or an externally detected stop. Non-Sonos outputs ign
 - **Sonos stays on Buffering:** confirm the speaker can reach Home Assistant on the LAN and that
   Home Assistant's internal URL is valid under **Settings → System → Network**.
 - **First Play is slower than Cast:** Sonos must open a fresh subscriber HLS stream through the local
-  audio-only relay. KSLive v0.3.2 reduces the initial HLS probe and preserves the relay for a 30-second
-  startup window instead of treating normal buffering as a failed playback.
+  audio-only relay. KSLive v0.3.3 preserves the relay for a 30-second startup window instead of
+  treating normal buffering as a failed playback. Pressing Play again while Buffering is safe and
+  does not restart the relay.
 - **No artwork card:** install Mushroom and Stack In Card, then add the YAML above. The integration
   cannot safely edit a user's dashboard during installation.
 

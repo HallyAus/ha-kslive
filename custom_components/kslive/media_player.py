@@ -24,6 +24,7 @@ from homeassistant.helpers.event import async_track_state_change_event
 from .const import MEDIA_ID_PREFIX
 from .coordinator import KSLiveCoordinator
 from .entity import KSLiveEntity
+from .playback_state import play_command_action
 
 
 async def async_setup_entry(
@@ -191,10 +192,16 @@ class KSLiveMediaPlayer(KSLiveEntity, MediaPlayerEntity):
     async def async_media_play(self) -> None:
         """Resume a paused output or start the selected KSLive item."""
         states = [self.hass.states.get(entity_id) for entity_id in self._targets]
-        if self.coordinator.playback_active and any(
-            state is not None and state.state == "paused" for state in states
-        ) and self.coordinator.last_targets == self._targets:
+        action = play_command_action(
+            (state.state for state in states if state is not None),
+            playback_active=self.coordinator.playback_active,
+            playback_starting=self.coordinator.playback_starting,
+            same_targets=self.coordinator.last_targets == self._targets,
+        )
+        if action == "resume":
             await self._call_output("media_play", targets=self._active_targets)
+            return
+        if action == "ignore":
             return
         await self._async_prepare_selected_output()
         content = self._content
