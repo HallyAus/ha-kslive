@@ -51,6 +51,32 @@ configured, choose **All configured speakers** to send the same stream to each o
 speakers may not be sample-synchronised; configure a native speaker-group entity when exact room-to-room
 sync is required.
 
+## Recommended dashboard card
+
+For an artwork-backed player with playback, volume and speaker selection in one visual group, install
+the **Mushroom** and **Stack In Card** frontend cards through HACS and add:
+
+```yaml
+type: custom:stack-in-card
+mode: vertical
+cards:
+  - type: media-control
+    entity: media_player.kslive_player
+    name: KSLive
+  - type: custom:mushroom-select-card
+    entity: select.kslive_output
+    name: Play on
+    icon: mdi:speaker-multiple
+    layout: horizontal
+    fill_container: true
+    tap_action:
+      action: more-info
+```
+
+The media-control card uses the current KSLive programme artwork as its background and includes the
+player's volume and transport controls. Changing **Play on** only changes the destination; it does
+not start playback.
+
 ## Security and compatibility
 
 This project is not affiliated with KSLive, King Kyle Group, or Uscreen. It is intended only for subscribers accessing content their account is authorized to play. It does not remove DRM, bypass subscription checks, or redistribute media.
