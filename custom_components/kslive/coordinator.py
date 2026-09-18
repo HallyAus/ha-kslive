@@ -13,6 +13,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import ATTR_ENTITY_ID
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed, HomeAssistantError
+from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
@@ -29,6 +30,7 @@ from .const import (
 )
 from .equalizer import KSLiveEqualizer
 from .models import KSLiveCatalog, parse_catalog
+from .output_names import first_output_name
 from .playback_state import ACTIVE_OUTPUT_STATES, PLAYBACK_START_GRACE, inactive_cleanup_delay
 from .streaming import needs_audio_relay
 
@@ -241,12 +243,25 @@ class KSLiveCoordinator(DataUpdateCoordinator[KSLiveCatalog]):
         players = self.configured_players
         sources: dict[str, tuple[str, ...]] = {}
         used_names: set[str] = set()
+        entity_registry = er.async_get(self.hass)
+        device_registry = dr.async_get(self.hass)
         for entity_id in players:
             state = self.hass.states.get(entity_id)
-            name = (
-                str(state.attributes.get("friendly_name"))
-                if state and state.attributes.get("friendly_name")
-                else entity_id
+            registry_entry = entity_registry.async_get(entity_id)
+            device = (
+                device_registry.async_get(registry_entry.device_id)
+                if registry_entry is not None and registry_entry.device_id is not None
+                else None
+            )
+            name = first_output_name(
+                (
+                    state.attributes.get("friendly_name") if state else None,
+                    registry_entry.name if registry_entry else None,
+                    device.name_by_user if device else None,
+                    device.name if device else None,
+                    registry_entry.original_name if registry_entry else None,
+                ),
+                entity_id,
             )
             if name in used_names:
                 name = f"{name} ({entity_id})"
