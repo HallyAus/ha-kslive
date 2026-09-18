@@ -15,6 +15,7 @@ from .api import KSLiveApiClient, KSLiveApiError, KSLiveAuthenticationError
 from .const import (
     CONF_ACCESS_TOKEN,
     CONF_DEVICE_ID,
+    CONF_IDLE_SLEEP,
     CONF_MEDIA_PLAYERS,
     CONF_REFRESH_TOKEN,
     CONF_SEARCH_QUERY,
@@ -39,12 +40,18 @@ class KSLiveConfigFlow(ConfigFlow, domain=DOMAIN):
 
     VERSION = 1
     _pending_data: dict[str, Any]
+    _device_id: str | None = None
 
     async def async_step_user(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         errors: dict[str, str] = {}
         if user_input is not None:
             email = user_input[CONF_EMAIL].strip().lower()
-            device_id = str(uuid.uuid4())
+            # Reject duplicates before the login request can register a device.
+            await self.async_set_unique_id(email)
+            self._abort_if_unique_id_configured()
+            if self._device_id is None:
+                self._device_id = str(uuid.uuid4())
+            device_id = self._device_id
             client = KSLiveApiClient(
                 async_get_clientsession(self.hass), device_id=device_id
             )
@@ -59,8 +66,6 @@ class KSLiveConfigFlow(ConfigFlow, domain=DOMAIN):
                 if user.get("subscribed") is False:
                     errors["base"] = "subscription_required"
                 else:
-                    await self.async_set_unique_id(email)
-                    self._abort_if_unique_id_configured()
                     auth = client.auth_data
                     self._pending_data = {
                         CONF_EMAIL: email,
@@ -83,6 +88,7 @@ class KSLiveConfigFlow(ConfigFlow, domain=DOMAIN):
                 options={
                     CONF_MEDIA_PLAYERS: user_input.get(CONF_MEDIA_PLAYERS, []),
                     CONF_SEARCH_QUERY: DEFAULT_SEARCH_QUERY,
+                    CONF_IDLE_SLEEP: True,
                 },
             )
         return self.async_show_form(
@@ -148,6 +154,10 @@ class KSLiveOptionsFlow(OptionsFlow):
             step_id="init",
             data_schema=vol.Schema(
                 {
+                    vol.Optional(
+                        CONF_IDLE_SLEEP,
+                        default=self._entry.options.get(CONF_IDLE_SLEEP, True),
+                    ): bool,
                     vol.Optional(
                         CONF_MEDIA_PLAYERS,
                         default=self._entry.options.get(CONF_MEDIA_PLAYERS, []),

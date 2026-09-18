@@ -44,5 +44,4 @@ class KSLiveRefreshButton(KSLiveEntity, ButtonEntity):
         self._attr_unique_id = f"{coordinator.entry.entry_id}_refresh"
 
     async def async_press(self) -> None:
-        await self.coordinator.async_request_refresh()
-
+        await self.coordinator.async_refresh_catalog()

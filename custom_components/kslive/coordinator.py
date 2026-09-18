@@ -23,6 +23,7 @@ from .api import KSLiveApiClient, KSLiveApiError, KSLiveAuthenticationError, KSL
 from .audio_proxy import KSLiveAudioProxy
 from .const import (
     ALL_SPEAKERS_SOURCE,
+    CONF_IDLE_SLEEP,
     CONF_MEDIA_PLAYERS,
     CONF_SEARCH_QUERY,
     DEFAULT_SCAN_INTERVAL,
@@ -30,7 +31,7 @@ from .const import (
     NAME,
 )
 from .equalizer import KSLiveEqualizer
-from .models import KSLiveCatalog, parse_catalog
+from .models import KSLiveCatalog, catalog_cache, parse_catalog
 from .output_names import first_output_name
 from .playback_state import PLAYBACK_START_GRACE, OutputSession, owns_media_url
 from .streaming import needs_audio_relay
@@ -54,6 +55,7 @@ class KSLiveCoordinator(DataUpdateCoordinator[KSLiveCatalog]):
             update_interval=DEFAULT_SCAN_INTERVAL,
         )
         self.entry = entry
+        self.loaded_options = dict(entry.options)
         self.client = client
         self.audio_proxy = audio_proxy
         self.equalizer = equalizer
@@ -67,10 +69,15 @@ class KSLiveCoordinator(DataUpdateCoordinator[KSLiveCatalog]):
         self._cleanup_tasks: dict[str, asyncio.Task[None]] = {}
         self._play_lock = asyncio.Lock()
         self._play_task: asyncio.Task[None] | None = None
-        self._pending_key: tuple[int, tuple[str, ...]] | None = None
+        self._pending_key: tuple[int | None, tuple[str, ...]] | None = None
         self._output_labels: dict[str, str] = {}
         self._unsub_state = None
         self._closing = False
+        self._catalog_store = Store(hass, 1, f"kslive.{entry.entry_id}.catalog")
+        self._catalog_lock = asyncio.Lock()
+        self._catalog_refreshing = False
+        self.catalog_updated_at: str | None = None
+        self._cached_catalog = parse_catalog({})
 
     def start_tracking(self) -> None:
         """Track configured outputs and service overrides through one listener."""
@@ -88,6 +95,54 @@ class KSLiveCoordinator(DataUpdateCoordinator[KSLiveCatalog]):
         self.async_update_listeners()
 
     async def _async_update_data(self) -> KSLiveCatalog:
+        # A coordinator timer or HA restart must not keep an idle login alive.
+        if self.idle_sleep and not self.playback_active:
+            return self._cached_catalog
+        return await self._async_fetch_catalog()
+
+    @property
+    def idle_sleep(self) -> bool:
+        return bool(self.entry.options.get(CONF_IDLE_SLEEP, True))
+
+    @property
+    def sleeping(self) -> bool:
+        return self.idle_sleep and not self.playback_active and not self._catalog_refreshing
+
+    async def async_load_catalog(self) -> None:
+        """Restore display metadata without contacting the subscriber service."""
+        stored = await self._catalog_store.async_load()
+        if isinstance(stored, dict) and isinstance(stored.get("catalog"), dict):
+            self._cached_catalog = parse_catalog(stored["catalog"])
+            self.catalog_updated_at = stored.get("updated_at")
+
+    async def async_refresh_catalog(self) -> None:
+        """An explicit user action may refresh, even while idle sleep is enabled."""
+        try:
+            catalog = await self._async_fetch_catalog()
+        except ConfigEntryAuthFailed:
+            self.entry.async_start_reauth(self.hass)
+            raise
+        self.async_set_updated_data(catalog)
+
+    async def _async_fetch_catalog(self) -> KSLiveCatalog:
+        async with self._catalog_lock:
+            if self._closing:
+                raise HomeAssistantError("KSLive is unloading")
+            self._catalog_refreshing = True
+            self.async_update_listeners()
+            try:
+                catalog = await self._async_request_catalog()
+                self._cached_catalog = catalog
+                self.catalog_updated_at = datetime.now(UTC).isoformat()
+                await self._catalog_store.async_save({
+                    "catalog": catalog_cache(catalog), "updated_at": self.catalog_updated_at,
+                })
+                return catalog
+            finally:
+                self._catalog_refreshing = False
+                self.async_update_listeners()
+
+    async def _async_request_catalog(self) -> KSLiveCatalog:
         try:
             payload = await self.client.async_search(
                 self.entry.options.get(CONF_SEARCH_QUERY, DEFAULT_SEARCH_QUERY)
@@ -111,12 +166,6 @@ class KSLiveCoordinator(DataUpdateCoordinator[KSLiveCatalog]):
         media_players: list[str] | None = None,
     ) -> None:
         """Resolve and play a live show or recording on configured players."""
-        if content_id is None:
-            content = self.data.playable if self.data else None
-            if content is None:
-                raise HomeAssistantError("No KSLive audio is currently available")
-            content_id = content.content_id
-
         targets = tuple(dict.fromkeys(
             self.selected_targets if media_players is None else media_players
         ))
@@ -156,7 +205,18 @@ class KSLiveCoordinator(DataUpdateCoordinator[KSLiveCatalog]):
             self._pending_key = None
             self.async_update_listeners()
 
-    async def _async_play_request(self, content_id: int, targets: tuple[str, ...]) -> None:
+    async def _async_play_request(self, content_id: int | None, targets: tuple[str, ...]) -> None:
+        # Keep wake/refresh inside the shared Play task: Stop can cancel it and
+        # repeated taps cannot create competing requests or use a stale live show.
+        if content_id is None:
+            if self.active_targets and self.last_content_id is not None:
+                content_id = self.last_content_id
+            else:
+                await self.async_refresh_catalog()
+                content = self.data.playable if self.data else None
+                if content is None:
+                    raise HomeAssistantError("No KSLive audio is currently available")
+                content_id = content.content_id
         async with self._play_lock:
             if content_id == self.last_content_id and set(targets) == set(self.last_targets):
                 self.output_state_changed()
@@ -190,6 +250,7 @@ class KSLiveCoordinator(DataUpdateCoordinator[KSLiveCatalog]):
         try:
             stream_url = await self.client.async_playback_url(content_id)
         except KSLiveAuthenticationError as err:
+            self.entry.async_start_reauth(self.hass)
             raise ConfigEntryAuthFailed from err
         except KSLivePlaybackError as err:
             raise HomeAssistantError(str(err)) from err
@@ -288,6 +349,9 @@ class KSLiveCoordinator(DataUpdateCoordinator[KSLiveCatalog]):
             self._unsub_state = None
         await self.async_stop_playback_effects(tuple(self._sessions))
         await self.equalizer.async_restore_all()
+        # Let any manual catalogue refresh finish before unloading its entities.
+        async with self._catalog_lock:
+            pass
 
     async def _async_release_target(
         self, target: str, session: OutputSession | None

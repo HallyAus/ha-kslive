@@ -35,6 +35,8 @@ class KSLiveStatusSensor(KSLiveEntity, SensorEntity):
 
     @property
     def native_value(self) -> str:
+        if self.coordinator.sleeping:
+            return "sleeping"
         return self.coordinator.data.state
 
     @property
@@ -44,6 +46,10 @@ class KSLiveStatusSensor(KSLiveEntity, SensorEntity):
         upcoming = data.upcoming
         latest = data.latest_recording
         return {
+            "idle_sleep_enabled": self.coordinator.idle_sleep,
+            "catalog_updated_at": self.coordinator.catalog_updated_at,
+            "catalog_is_cached": self.coordinator.sleeping,
+            "cached_audio_status": data.state,
             "current_title": current.title if current else None,
             "current_content_id": current.content_id if current else None,
             "next_title": upcoming.title if upcoming else None,

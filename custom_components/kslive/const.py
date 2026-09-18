@@ -18,6 +18,7 @@ CONF_TOKEN_EXPIRES_AT = "token_expires_at"
 CONF_DEVICE_ID = "device_id"
 CONF_MEDIA_PLAYERS = "media_players"
 CONF_SEARCH_QUERY = "search_query"
+CONF_IDLE_SLEEP = "idle_sleep"
 
 DEFAULT_SEARCH_QUERY = "Audio"
 DEFAULT_SCAN_INTERVAL = timedelta(minutes=5)

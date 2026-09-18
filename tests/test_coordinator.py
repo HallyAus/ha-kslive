@@ -127,6 +127,9 @@ def runtime(monkeypatch):
             self.gate.set()
             self.fail = False
 
+        async def async_search(self, _query):
+            return {"contents": [{"id": 42, "title": "Audio", "content_type": "audio"}]}
+
         async def async_playback_url(self, content_id):
             self.calls.append(content_id)
             self.started.set()
@@ -510,5 +513,212 @@ def test_takeover_restoration_does_not_wait_for_another_playback_url(runtime):
         assert coordinator.audio_proxy.active == set()
         coordinator.client.gate.set()
         await next_play
+        await coordinator.async_shutdown()
+    asyncio.run(run())
+
+
+def test_idle_startup_and_timer_never_contact_kslive(runtime):
+    async def run():
+        coordinator = runtime.make()
+
+        async def forbidden(_query):
+            pytest.fail("Idle startup/timer contacted the subscriber service")
+
+        coordinator.client.async_search = forbidden
+        await coordinator.async_load_catalog()
+        for _ in range(3):
+            catalog = await coordinator._async_update_data()
+            assert catalog.items == ()
+        assert coordinator.sleeping
+        assert coordinator.catalog_updated_at is None
+        await coordinator.async_shutdown()
+    asyncio.run(run())
+
+
+def test_explicit_refresh_caches_catalog_without_playing_and_restart_stays_asleep(runtime):
+    async def run():
+        coordinator = runtime.make()
+        await coordinator.async_refresh_catalog()
+        assert coordinator.data.playable.content_id == 42
+        assert coordinator.sleeping
+        assert coordinator.catalog_updated_at
+        assert coordinator.client.calls == []
+        assert coordinator.hass.services.calls == []
+        restored = runtime.make()
+        await restored.async_load_catalog()
+
+        async def forbidden(_query):
+            pytest.fail("Restoring cached catalogue contacted KSLive")
+
+        restored.client.async_search = forbidden
+        result = await restored._async_update_data()
+        assert result.playable.content_id == 42
+        assert restored.catalog_updated_at == coordinator.catalog_updated_at
+        await coordinator.async_shutdown()
+        await restored.async_shutdown()
+    asyncio.run(run())
+
+
+def test_play_wakes_with_fresh_catalog_and_stop_returns_to_sleep(runtime):
+    async def run():
+        coordinator = runtime.make()
+        calls = []
+
+        async def search(_query):
+            calls.append("search")
+            return {"contents": [{"id": 99, "title": "New show", "content_type": "audio"}]}
+
+        coordinator.client.async_search = search
+        await coordinator.async_play()
+        assert coordinator.client.calls == [99]  # Never play yesterday's cached item.
+        assert not coordinator.sleeping
+        await coordinator.async_stop()
+        assert coordinator.sleeping
+        await coordinator._async_update_data()
+        assert calls == ["search"]
+        await coordinator.async_shutdown()
+    asyncio.run(run())
+
+
+def test_stop_cancels_wake_before_stream_resolution(runtime):
+    async def run():
+        coordinator = runtime.make()
+        started = asyncio.Event()
+
+        async def search(_query):
+            started.set()
+            await asyncio.Event().wait()
+
+        coordinator.client.async_search = search
+        play = asyncio.create_task(coordinator.async_play())
+        await started.wait()
+        await coordinator.async_stop()
+        with pytest.raises(asyncio.CancelledError):
+            await play
+        assert coordinator.sleeping
+        assert coordinator.client.calls == []
+        assert coordinator.hass.services.calls == []
+        await coordinator.async_shutdown()
+    asyncio.run(run())
+
+
+def test_idle_sleep_can_be_disabled_for_background_catalog_updates(runtime):
+    async def run():
+        coordinator = runtime.make()
+        coordinator.entry.options["idle_sleep"] = False
+        result = await coordinator._async_update_data()
+        assert result.playable.content_id == 42
+        assert not coordinator.sleeping
+        await coordinator.async_shutdown()
+    asyncio.run(run())
+
+
+def test_revoked_login_prompts_reauthentication_only_on_explicit_wake(runtime):
+    async def run():
+        coordinator = runtime.make()
+        prompts = []
+        coordinator.entry.async_start_reauth = lambda hass: prompts.append(hass)
+
+        async def rejected(_query):
+            raise load_module("api").KSLiveAuthenticationError("Revoked")
+
+        coordinator.client.async_search = rejected
+        await coordinator._async_update_data()
+        assert prompts == []
+        with pytest.raises(runtime.error):
+            await coordinator.async_play()
+        assert len(prompts) == 1
+        assert coordinator.sleeping
+        assert coordinator.audio_proxy.created == []
+        await coordinator._async_update_data()
+        assert len(prompts) == 1
+        await coordinator.async_shutdown()
+    asyncio.run(run())
+
+
+def test_setup_checks_duplicate_before_login_and_reuses_identity_on_retry(runtime):
+    async def run():
+        class Abort(Exception):
+            pass
+
+        class Flow:
+            duplicate = False
+
+            def __init_subclass__(cls, **_kwargs):
+                pass
+
+            async def async_set_unique_id(self, value):
+                self.unique_id = value
+
+            def _abort_if_unique_id_configured(self):
+                if self.duplicate:
+                    raise Abort
+
+            def async_show_form(self, **kwargs):
+                return kwargs
+
+        config_entries = sys.modules["homeassistant.config_entries"]
+        config_entries.ConfigFlow = Flow
+        config_entries.ConfigFlowResult = dict
+        config_entries.OptionsFlow = object
+        const = sys.modules["homeassistant.const"]
+        const.CONF_EMAIL = "email"
+        const.CONF_PASSWORD = "password"
+        runtime.module("homeassistant.helpers.selector")
+        runtime.module(
+            "homeassistant.helpers.aiohttp_client", async_get_clientsession=lambda hass: None,
+        )
+        flow_module = runtime.load("config_flow")
+        identities = []
+
+        class Client:
+            def __init__(self, _session, *, device_id):
+                identities.append(device_id)
+
+            async def async_login(self, _email, _password):
+                raise flow_module.KSLiveAuthenticationError("Mock rejected credentials")
+
+        flow_module.KSLiveApiClient = Client
+        flow = flow_module.KSLiveConfigFlow()
+        flow.hass = object()
+        flow.duplicate = True
+        with pytest.raises(Abort):
+            await flow.async_step_user({"email": "test@example.com", "password": "test"})
+        assert identities == []
+        flow.duplicate = False
+        for _ in range(2):
+            await flow.async_step_user({"email": "test@example.com", "password": "test"})
+        assert len(identities) == 2
+        assert identities[0] == identities[1]
+    asyncio.run(run())
+
+
+def test_saving_rotated_tokens_does_not_reload_and_cancel_wake(runtime):
+    async def run():
+        coordinator = runtime.make()
+        runtime.module("homeassistant.components.ffmpeg", get_ffmpeg_manager=lambda hass: None)
+        runtime.module("homeassistant.helpers.config_validation", entity_ids=lambda value: value)
+        runtime.module(
+            "homeassistant.helpers.aiohttp_client", async_get_clientsession=lambda hass: None,
+        )
+        sys.modules["homeassistant.core"].ServiceCall = object
+        sys.modules["homeassistant.const"].EVENT_HOMEASSISTANT_STOP = "stop"
+        proxy = sys.modules["kslive_runtime.audio_proxy"]
+        proxy.DATA_AUDIO_PROXY = "proxy"
+        proxy.KSLiveAudioView = object
+        integration = runtime.load("__init__")
+        reloads = []
+
+        async def reload(entry_id):
+            reloads.append(entry_id)
+
+        coordinator.hass.config_entries = SimpleNamespace(async_reload=reload)
+        coordinator.hass.data = {"kslive": {"test": coordinator}}
+        coordinator.entry.data = {"access_token": "rotated"}
+        await integration._async_reload_entry(coordinator.hass, coordinator.entry)
+        assert reloads == []
+        coordinator.entry.options["idle_sleep"] = False
+        await integration._async_reload_entry(coordinator.hass, coordinator.entry)
+        assert reloads == ["test"]
         await coordinator.async_shutdown()
     asyncio.run(run())

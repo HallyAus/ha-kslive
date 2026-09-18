@@ -40,11 +40,13 @@
         "title": "KSLive options",
         "data": {
           "media_players": "Speakers",
-          "search_query": "Catalog search text"
+          "search_query": "Catalog search text",
+          "idle_sleep": "Sleep when idle"
         },
         "data_description": {
           "media_players": "Speakers that receive KSLive audio when Play audio is pressed.",
-          "search_query": "Text used to find the KSLive audio feed and recordings."
+          "search_query": "Text used to find the KSLive audio feed and recordings.",
+          "idle_sleep": "Stop background requests and login refreshes while idle. Play, Refresh or Browse wakes the integration. This does not sign out or guarantee a free device slot."
         }
       }
     }

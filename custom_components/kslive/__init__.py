@@ -63,6 +63,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     await equalizer.async_load()
     coordinator = KSLiveCoordinator(hass, entry, client, audio_proxy, equalizer)
     await coordinator.async_load_output()
+    await coordinator.async_load_catalog()
     await coordinator.async_config_entry_first_refresh()
 
     async def async_restore_equalizer(_event) -> None:
@@ -108,4 +109,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 
 async def _async_reload_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    await hass.config_entries.async_reload(entry.entry_id)
+    # Persisting a rotated login token also invokes this listener. Reloading in
+    # that case would cancel the very Play request that woke the expired login.
+    coordinator = hass.data.get(DOMAIN, {}).get(entry.entry_id)
+    if coordinator is not None and coordinator.loaded_options != dict(entry.options):
+        await hass.config_entries.async_reload(entry.entry_id)

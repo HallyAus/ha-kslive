@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -45,6 +46,7 @@ class KSLiveApiClient:
         self._expires_at = float(expires_at or 0)
         self._device_id = device_id
         self._token_callback = token_callback
+        self._request_lock = asyncio.Lock()
 
     @property
     def _base_headers(self) -> dict[str, str]:
@@ -129,6 +131,14 @@ class KSLiveApiClient:
         retry: bool = True,
         **kwargs: Any,
     ) -> Any:
+        # Play and Browse can wake together. Serialise token rotation so neither
+        # request attempts to reuse a refresh token the other just replaced.
+        async with self._request_lock:
+            return await self._request_value_unlocked(method, path, retry=retry, **kwargs)
+
+    async def _request_value_unlocked(
+        self, method: str, path: str, *, retry: bool = True, **kwargs: Any
+    ) -> Any:
         """Request any JSON value, refreshing an expired session once."""
         if self._token_expiring:
             await self.async_refresh()
@@ -136,7 +146,7 @@ class KSLiveApiClient:
         if response.status == 401 and retry:
             await response.read()
             await self.async_refresh()
-            return await self._request_value(method, path, retry=False, **kwargs)
+            return await self._request_value_unlocked(method, path, retry=False, **kwargs)
         return await self._json_value(response)
 
     async def _raw_request(

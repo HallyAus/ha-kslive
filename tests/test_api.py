@@ -80,3 +80,29 @@ def test_login_exposes_tokens_but_not_password() -> None:
     }
     assert "password" not in client.auth_data
 
+
+def test_concurrent_wake_requests_rotate_expired_token_only_once() -> None:
+    async def run():
+        class SlowSession(FakeSession):
+            async def request(self, method, url, **kwargs):
+                await asyncio.sleep(0)
+                return await super().request(method, url, **kwargs)
+
+        session = SlowSession([
+            FakeResponse({"auth": {
+                "access_token": "new-access", "refresh_token": "new-refresh",
+                "exp": 4_102_444_800,
+            }}),
+            FakeResponse({"contents": []}),
+            FakeResponse({"contents": []}),
+        ])
+        client = api.KSLiveApiClient(
+            session, access_token="old", refresh_token="old-refresh", expires_at=1,
+        )
+        await asyncio.gather(client.async_search("Audio"), client.async_search("Audio"))
+        assert len([c for c in session.calls if c[1].endswith("/sessions/refresh")]) == 1
+        assert all(
+            c[2]["headers"]["Authorization"] == "Bearer new-access"
+            for c in session.calls if c[0] == "GET"
+        )
+    asyncio.run(run())

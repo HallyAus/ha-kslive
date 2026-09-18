@@ -149,6 +149,24 @@ def parse_catalog(payload: dict[str, Any], *, now: datetime | None = None) -> KS
     )
 
 
+def catalog_cache(catalog: KSLiveCatalog) -> dict[str, Any]:
+    """Persist display metadata only, never raw API responses or stream URLs."""
+    return {"contents": [
+        {
+            "id": item.content_id,
+            "title": item.title,
+            "content_type": item.content_type,
+            "launch_date": item.launch_date.isoformat() if item.launch_date else None,
+            "permalink": item.permalink,
+            "live_active": item.live_active,
+            "live_status": item.live_status,
+            "description": item.description,
+            "preview": item.image_url,
+        }
+        for item in catalog.items
+    ]}
+
+
 def find_stream_url(value: Any) -> str | None:
     """Find an HLS or audio URL in a nested API response."""
     if isinstance(value, str):

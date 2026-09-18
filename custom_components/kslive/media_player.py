@@ -171,9 +171,10 @@ class KSLiveMediaPlayer(KSLiveEntity, MediaPlayerEntity):
 
     async def async_media_play(self) -> None:
         """Resume a paused output or start the selected KSLive item."""
-        content = self._content
         await self.coordinator.async_play(
-            content_id=content.content_id if content else None,
+            content_id=(
+                self.coordinator.last_content_id if self.coordinator.playback_active else None
+            ),
             media_players=list(self._targets),
         )
 
@@ -229,6 +230,7 @@ class KSLiveMediaPlayer(KSLiveEntity, MediaPlayerEntity):
     ) -> BrowseMedia:
         """Expose the KSLive catalogue in Home Assistant's media browser."""
         del media_content_type, media_content_id
+        await self.coordinator.async_refresh_catalog()
         items = self.coordinator.data.playable_items if self.coordinator.data else ()
         children = [
             BrowseMedia(
