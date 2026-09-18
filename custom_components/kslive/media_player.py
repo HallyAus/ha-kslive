@@ -166,7 +166,7 @@ class KSLiveMediaPlayer(KSLiveEntity, MediaPlayerEntity):
 
     async def async_select_source(self, source: str) -> None:
         """Choose an output without starting playback."""
-        self.coordinator.select_source(source)
+        await self.coordinator.async_select_source(source)
 
     async def async_play_media(
         self,

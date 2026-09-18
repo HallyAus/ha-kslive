@@ -14,6 +14,7 @@ from homeassistant.const import ATTR_ENTITY_ID
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed, HomeAssistantError
 from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .api import KSLiveApiClient, KSLiveApiError, KSLiveAuthenticationError, KSLivePlaybackError
@@ -56,7 +57,10 @@ class KSLiveCoordinator(DataUpdateCoordinator[KSLiveCatalog]):
         self.last_content_id: int | None = None
         self.last_targets: tuple[str, ...] = ()
         self.playback_active = False
-        self._selected_source: str | None = None
+        self._selected_output_key: str | None = None
+        self._output_store = Store[dict[str, str]](
+            hass, 1, f"kslive.{entry.entry_id}.output"
+        )
         self._inactive_cleanup_task: asyncio.Task[None] | None = None
         self._playback_start_deadline: float | None = None
 
@@ -70,6 +74,12 @@ class KSLiveCoordinator(DataUpdateCoordinator[KSLiveCatalog]):
         except KSLiveApiError as err:
             raise UpdateFailed(str(err)) from err
         return parse_catalog(payload, now=datetime.now(UTC))
+
+    async def async_load_output(self) -> None:
+        """Load the user's durable output choice."""
+        stored = await self._output_store.async_load()
+        if isinstance(stored, dict) and isinstance(stored.get("key"), str):
+            self._selected_output_key = stored["key"]
 
     async def async_play(
         self,
@@ -250,9 +260,14 @@ class KSLiveCoordinator(DataUpdateCoordinator[KSLiveCatalog]):
     def selected_source(self) -> str | None:
         """Return the current output selection without starting playback."""
         sources = self.output_sources
-        if self._selected_source not in sources:
-            self._selected_source = next(iter(sources), None)
-        return self._selected_source
+        for source, targets in sources.items():
+            if self._output_key(targets) == self._selected_output_key:
+                return source
+        if not sources:
+            return None
+        source, targets = next(iter(sources.items()))
+        self._selected_output_key = self._output_key(targets)
+        return source
 
     @property
     def selected_targets(self) -> tuple[str, ...]:
@@ -260,12 +275,20 @@ class KSLiveCoordinator(DataUpdateCoordinator[KSLiveCatalog]):
         source = self.selected_source
         return self.output_sources.get(source, ()) if source is not None else ()
 
-    def select_source(self, source: str) -> None:
+    async def async_select_source(self, source: str) -> None:
         """Select an output without transferring or starting playback."""
-        if source not in self.output_sources:
+        targets = self.output_sources.get(source)
+        if targets is None:
             raise HomeAssistantError(f"Unknown KSLive output: {source}")
-        self._selected_source = source
+        self._selected_output_key = self._output_key(targets)
+        await self._output_store.async_save({"key": self._selected_output_key})
         self.async_set_updated_data(self.data)
+
+    def _output_key(self, targets: tuple[str, ...]) -> str:
+        """Return a stable storage key independent of speaker display names."""
+        if len(targets) == 1:
+            return targets[0]
+        return ALL_SPEAKERS_SOURCE
 
     def content(self, content_id: int | None = None):
         """Return a catalog item by ID, or the current queue item."""

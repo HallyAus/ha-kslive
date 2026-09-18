@@ -62,6 +62,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     equalizer = KSLiveEqualizer(hass, entry.entry_id)
     await equalizer.async_load()
     coordinator = KSLiveCoordinator(hass, entry, client, audio_proxy, equalizer)
+    await coordinator.async_load_output()
     await coordinator.async_config_entry_first_refresh()
 
     async def async_restore_equalizer(_event) -> None:
