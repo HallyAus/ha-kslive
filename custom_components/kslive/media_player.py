@@ -16,15 +16,13 @@ from homeassistant.components.media_player import (
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import ATTR_ENTITY_ID
-from homeassistant.core import Event, HomeAssistant, callback
+from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
-from homeassistant.helpers.event import async_track_state_change_event
 
 from .const import MEDIA_ID_PREFIX
 from .coordinator import KSLiveCoordinator
 from .entity import KSLiveEntity
-from .playback_state import play_command_action
 
 
 async def async_setup_entry(
@@ -49,23 +47,6 @@ class KSLiveMediaPlayer(KSLiveEntity, MediaPlayerEntity):
         super().__init__(coordinator)
         self._attr_unique_id = f"{coordinator.entry.entry_id}_player"
 
-    async def async_added_to_hass(self) -> None:
-        """Track output state changes so the proxy controls stay current."""
-        await super().async_added_to_hass()
-        if self.coordinator.configured_players:
-            self.async_on_remove(
-                async_track_state_change_event(
-                    self.hass,
-                    self.coordinator.configured_players,
-                    self._async_output_state_changed,
-                )
-            )
-
-    @callback
-    def _async_output_state_changed(self, _event: Event) -> None:
-        self.coordinator.output_state_changed()
-        self.async_write_ha_state()
-
     @property
     def supported_features(self) -> MediaPlayerEntityFeature:
         """Return the controls offered by the KSLive player."""
@@ -87,16 +68,18 @@ class KSLiveMediaPlayer(KSLiveEntity, MediaPlayerEntity):
         """Mirror KSLive playback on the selected output."""
         if not self.coordinator.playback_active:
             return MediaPlayerState.IDLE
+        if self.coordinator.playback_starting:
+            return MediaPlayerState.BUFFERING
         states = [
             self.hass.states.get(entity_id)
-            for entity_id in (self.coordinator.last_targets or self._targets)
+            for entity_id in self.coordinator.active_targets
         ]
         raw_states = {state.state for state in states if state is not None}
         if "playing" in raw_states:
             return MediaPlayerState.PLAYING
         if "paused" in raw_states:
             return MediaPlayerState.PAUSED
-        if self.coordinator.playback_starting or "buffering" in raw_states:
+        if "buffering" in raw_states:
             return MediaPlayerState.BUFFERING
         if raw_states and raw_states <= {"off", "unavailable", "unknown"}:
             return MediaPlayerState.OFF
@@ -117,9 +100,7 @@ class KSLiveMediaPlayer(KSLiveEntity, MediaPlayerEntity):
 
     @property
     def _active_targets(self) -> tuple[str, ...]:
-        if self.coordinator.playback_active and self.coordinator.last_targets:
-            return self.coordinator.last_targets
-        return self._targets
+        return self.coordinator.active_targets
 
     @property
     def _content(self):
@@ -183,7 +164,6 @@ class KSLiveMediaPlayer(KSLiveEntity, MediaPlayerEntity):
             content_id = int(value)
         except ValueError as err:
             raise ValueError(f"Invalid KSLive media ID: {media_id}") from err
-        await self._async_prepare_selected_output()
         await self.coordinator.async_play(
             content_id=content_id,
             media_players=list(self._targets),
@@ -191,19 +171,6 @@ class KSLiveMediaPlayer(KSLiveEntity, MediaPlayerEntity):
 
     async def async_media_play(self) -> None:
         """Resume a paused output or start the selected KSLive item."""
-        states = [self.hass.states.get(entity_id) for entity_id in self._targets]
-        action = play_command_action(
-            (state.state for state in states if state is not None),
-            playback_active=self.coordinator.playback_active,
-            playback_starting=self.coordinator.playback_starting,
-            same_targets=self.coordinator.last_targets == self._targets,
-        )
-        if action == "resume":
-            await self._call_output("media_play", targets=self._active_targets)
-            return
-        if action == "ignore":
-            return
-        await self._async_prepare_selected_output()
         content = self._content
         await self.coordinator.async_play(
             content_id=content.content_id if content else None,
@@ -214,15 +181,11 @@ class KSLiveMediaPlayer(KSLiveEntity, MediaPlayerEntity):
         await self._call_output("media_pause", targets=self._active_targets)
 
     async def async_media_stop(self) -> None:
-        await self._call_output("media_stop", targets=self._active_targets)
-        await self.coordinator.async_stop_playback_effects(self._active_targets)
-        self.coordinator.playback_active = False
-        self.coordinator.async_set_updated_data(self.coordinator.data)
+        await self.coordinator.async_stop()
 
     async def async_media_next_track(self) -> None:
         content = self.coordinator.adjacent_content(1)
         if content is not None:
-            await self._async_prepare_selected_output()
             await self.coordinator.async_play(
                 content_id=content.content_id,
                 media_players=list(self._targets),
@@ -231,7 +194,6 @@ class KSLiveMediaPlayer(KSLiveEntity, MediaPlayerEntity):
     async def async_media_previous_track(self) -> None:
         content = self.coordinator.adjacent_content(-1)
         if content is not None:
-            await self._async_prepare_selected_output()
             await self.coordinator.async_play(
                 content_id=content.content_id,
                 media_players=list(self._targets),
@@ -259,21 +221,6 @@ class KSLiveMediaPlayer(KSLiveEntity, MediaPlayerEntity):
         await self.hass.services.async_call(
             "media_player", service, payload, blocking=True
         )
-
-    async def _async_prepare_selected_output(self) -> None:
-        """Stop an old output before intentionally starting on a newly selected one."""
-        if (
-            self.coordinator.playback_active
-            and self.coordinator.last_targets
-            and self.coordinator.last_targets != self._targets
-        ):
-            await self._call_output(
-                "media_stop", targets=self.coordinator.last_targets
-            )
-            await self.coordinator.async_stop_playback_effects(
-                self.coordinator.last_targets
-            )
-            self.coordinator.playback_active = False
 
     async def async_browse_media(
         self,

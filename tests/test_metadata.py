@@ -12,7 +12,7 @@ def test_manifest() -> None:
     )
     assert manifest["domain"] == "kslive"
     assert manifest["config_flow"] is True
-    assert manifest["version"] == "0.3.5"
+    assert manifest["version"] == "0.3.6"
     assert set(manifest["dependencies"]) == {"ffmpeg", "http"}
 
 

@@ -66,13 +66,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     await coordinator.async_config_entry_first_refresh()
 
     async def async_restore_equalizer(_event) -> None:
-        await coordinator.async_stop_playback_effects(coordinator.last_targets)
+        await coordinator.async_shutdown()
 
     entry.async_on_unload(
         hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STOP, async_restore_equalizer)
     )
 
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
+    coordinator.start_tracking()
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     entry.async_on_unload(entry.add_update_listener(_async_reload_entry))
 
@@ -99,7 +100,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if not await hass.config_entries.async_unload_platforms(entry, PLATFORMS):
         return False
     coordinator: KSLiveCoordinator = hass.data[DOMAIN].pop(entry.entry_id)
-    await coordinator.async_stop_playback_effects(coordinator.configured_players)
+    await coordinator.async_shutdown()
     if not hass.data[DOMAIN]:
         hass.services.async_remove(DOMAIN, SERVICE_PLAY)
         hass.data.pop(DOMAIN, None)

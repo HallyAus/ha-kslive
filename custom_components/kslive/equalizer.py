@@ -76,7 +76,7 @@ class KSLiveEqualizer:
                 if target not in self._snapshots:
                     self._snapshots[target] = self._snapshot(controls)
                 try:
-                    await self._async_set_controls(controls)
+                    await self._async_set_controls(self._snapshots[target].controls)
                 except HomeAssistantError:
                     _LOGGER.warning(
                         "Unable to apply the KSLive equalizer preset to %s",
@@ -136,11 +136,19 @@ class KSLiveEqualizer:
         return controls if any(asdict(controls).values()) else None
 
     def _snapshot(self, controls: _EqualizerControls) -> _EqualizerSnapshot:
+        bass = self._number_state(controls.bass)
+        treble = self._number_state(controls.treble)
+        loudness = self._switch_state(controls.loudness)
+        # Never change a control whose original value cannot be restored.
         return _EqualizerSnapshot(
-            controls=controls,
-            bass=self._number_state(controls.bass),
-            treble=self._number_state(controls.treble),
-            loudness=self._switch_state(controls.loudness),
+            controls=_EqualizerControls(
+                bass=controls.bass if bass is not None else None,
+                treble=controls.treble if treble is not None else None,
+                loudness=controls.loudness if loudness is not None else None,
+            ),
+            bass=bass,
+            treble=treble,
+            loudness=loudness,
         )
 
     async def _async_set_controls(self, controls: _EqualizerControls) -> None:
